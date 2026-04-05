@@ -151,6 +151,11 @@ on:
         description: "是否添加风驰驱动1.0？"
         required: true
         default: false
+      RE_KERNEL:
+        type: boolean
+        description: "是否添加Re-Kernel？"
+        required: true
+        default: false
       SUSFS_DEV:
         type: boolean
         description: "是否拉取SUSFS-DEV分支？"
@@ -169,7 +174,7 @@ on:
 
 jobs:
   build:
-    name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ contains(github.event.inputs.FILE, '_aosp') && ' [AOSP]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM_BBG == 'true' && ' [BBG]' || '' }}${{ github.event.inputs.SCHED_HMBIRD == 'true' && ' [HMBIRD]' || '' }}${{ startsWith(github.event.inputs.ZRAM, '1/') && ' [ZRAM]' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
+    name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ contains(github.event.inputs.FILE, '_aosp') && ' [AOSP]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM_BBG == 'true' && ' [BBG]' || '' }}${{ github.event.inputs.SCHED_HMBIRD == 'true' && ' [HMBIRD]' || '' }}${{ startsWith(github.event.inputs.ZRAM, '1/') && ' [ZRAM]' || '' }}${{ github.event.inputs.RE_KERNEL == 'true' && ' [REKER]' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
     runs-on: ubuntu-latest
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -312,6 +317,9 @@ jobs:
           echo "Selected FILE: ${{ github.event.inputs.FILE }}"
           echo "Selected MANAGER_SOURCE: ${{ github.event.inputs.MANAGER_SOURCE }}"
           echo "Selected SUSFS_CI: ${{ github.event.inputs.SUSFS_CI }}"
+          if [ "${{ github.event.inputs.SUSFS_CI }}" != "N/A" ]; then
+            echo "::warning title=SUSFS Not Required::当前管理器已自带附加模块，无需启用 SUSFS 模块，强制启用可能导致不开机。"
+          fi
           echo "Selected KPM: ${{ github.event.inputs.KPM }}"
           echo "Custom SUSFS_META: ${{ github.event.inputs.SUSFS_META }}"
           echo "Custom KSU_META: ${{ github.event.inputs.KSU_META }}"
@@ -323,6 +331,7 @@ jobs:
           echo "Selected FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"
           echo "Selected SCHED_HMBIRD: ${{ github.event.inputs.SCHED_HMBIRD }}"
           echo "Selected UNICODE_BYPASS: ${{ github.event.inputs.UNICODE_BYPASS }}"
+          echo "Selected RE_KERNEL: ${{ github.event.inputs.RE_KERNEL }}"
 
           BUILD_TIME="${{ github.event.inputs.BUILD_TIME }}"
           SUFFIX="${{ github.event.inputs.SUFFIX }}"
@@ -356,7 +365,7 @@ jobs:
           print(''.join(out))
           # 异常字符警告
           if warn:
-              print("::warning title=BUILD_TIME Error::检测到BUILD_TIME异常符号调用，请注意!")
+              print("::warning title=BUILD_TIME Error::检测到自定义构建时间异常符号调用，请注意!")
           EOF
 
           # SUFFIX
@@ -377,10 +386,10 @@ jobs:
 
           # 异常字符警告
           if warn:
-              print("::warning title=SUFFIX Error::检测到内核后缀异常符号调用，请注意!")
+              print("::warning title=SUFFIX Error::检测到自定义内核后缀异常符号调用，请注意!")
           # 格式重复检测
           if re.search(r'^\d{1,3}\.\d{1,3}\.\d{1,3}|-?android\d{2,3}-', s):
-              print("::warning title=SUFFIX Formatting Error::检测到内核后缀存在重复或过度内容调用，请注意!")
+              print("::warning title=SUFFIX Format Error::检测到自定义内核后缀存在重复或冗余内容调用，请注意!")
           EOF
 
           echo "------------------------------"
@@ -533,6 +542,8 @@ jobs:
           echo "KV1=${BRANCH#*-}"       | cut -d. -f1 >> $GITHUB_ENV
           echo "KV2=${BRANCH#*-}"       | tr -d '.' >> $GITHUB_ENV
           echo "KV3=${NEW_VERSION}"     | tr -d '.' >> $GITHUB_ENV
+          echo "KERNEL_SHORT_VERSION=$(echo $NEW_VERSION | cut -d. -f1,2)" >> $GITHUB_ENV
+          echo "KERNEL_SHORT_PATCH_VERSION=$(echo $NEW_VERSION | cut -d. -f1,2 | tr '.' '_')" >> $GITHUB_ENV
 
       - name: Rust Version Handling
         run: |
@@ -723,6 +734,9 @@ jobs:
             fi
             cd ..
           fi
+          if [ "${{ github.event.inputs.RE_KERNEL }}" = "true" ]; then
+            git clone https://github.com/Sakion-Team/Re-Kernel.git
+          fi
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           git clone https://github.com/Numbersf/Action-Build.git
           cd kernel_platform
@@ -843,6 +857,17 @@ jobs:
             patch -p1 --forward < "${PATCH_DIR}/unicode_bypass_fix_6.1+.patch" || true
           fi
 
+      - name: Apply RE_KERNEL
+        if: ${{ github.event.inputs.RE_KERNEL == 'true' }}
+        run: |
+          RE_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Re-Kernel/LKM-Source"
+          cd kernel_workspace/kernel_platform/common
+          sed -i '/endmenu/i source "drivers/rekernel/Kconfig"' drivers/Kconfig
+          sed -i '$a \#Re-Kernel Support\nobj-$(CONFIG_REKERNEL) += rekernel/' drivers/Makefile
+          mkdir -p drivers/rekernel
+          cp ${RE_DIR}/rekernel.c ${RE_DIR}/rekernel.h ${RE_DIR}/Makefile ${RE_DIR}/Kconfig drivers/rekernel/
+          sed -i "s|^\s*//\s*#define KERNEL_${KERNEL_SHORT_PATCH_VERSION}|\#define KERNEL_${KERNEL_SHORT_PATCH_VERSION}|" drivers/rekernel/rekernel.h
+
       - name: Apply ZRAM
         if: startsWith(github.event.inputs.ZRAM, '1/')
         run: |
@@ -955,6 +980,12 @@ jobs:
             echo "CONFIG_TCP_ECN=y" >> "$CONFIG_FILE"
             echo "CONFIG_IPV6_ECN=y" >> "$CONFIG_FILE"
             echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$CONFIG_FILE"
+          fi
+
+          # Re-Kernel配置*
+          if [ "${{ github.event.inputs.RE_KERNEL }}" = "true" ]; then
+            echo "CONFIG_REKERNEL=y" >> "$CONFIG_FILE"
+            echo "CONFIG_REKERNEL_NETWORK=y" >> "$CONFIG_FILE"
           fi
 
           # ZRAM配置*
@@ -1219,17 +1250,23 @@ jobs:
             cp "$image_path" kernel_workspace/kernel_platform/out/Final-Image-Find/Image
           fi
 
-      - name: Apply patch_linux and Replace Image
-        if: ${{ github.event.inputs.KPM == 'KPM' }}
+      - name: Apply KPX and Replace Image
+        if: ${{ github.event.inputs.KPM != 'N/A' }}
         run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/SukiSU_patch/kpm"
+          KPM_DIR="${GITHUB_WORKSPACE}/kernel_workspace/SukiSU_patch/kpm"
+          KPN_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
           OUT_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out/Final-Image-Find"
           cd "${OUT_DIR}"
-          cp "${PATCH_DIR}/patch_linux" .
-          chmod +x patch_linux
-          ./patch_linux
-          rm -f Image
-          mv oImage Image
+          if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then
+            cp "${KPM_DIR}/patch_linux" .
+            chmod +x patch_linux
+            ./patch_linux
+          else
+            cp "${KPN_DIR}/kptools-linux" "${KPN_DIR}/kpimg-linux" .
+            chmod +x ./kptools-linux
+            ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
+          fi
+          mv -f oImage Image
           cp Image "${GITHUB_WORKSPACE}/AnyKernel3/Image"
 
       - name: Download Latest SUSFS Module from CI
@@ -1295,7 +1332,7 @@ jobs:
       - name: Set zip Suffix
         id: suffix
         run: |
-          echo "value=${{ env.ZRAM_ALGO_U && format('_{0}', env.ZRAM_ALGO_U) || '' }}${{ github.event.inputs.KPM == 'KPM' && '_KPM' || github.event.inputs.KPM == 'KPN' && '_KPN' || '' }}${{ github.event.inputs.LSM_BBG == 'true' && '_BBG' || '' }}_ILH${{ github.event.inputs.SCHED_HMBIRD== 'true' && '_HMBIRD' || '' }}" >> $GITHUB_OUTPUT
+          echo "value=${{ env.ZRAM_ALGO_U && format('_{0}', env.ZRAM_ALGO_U) || '' }}${{ github.event.inputs.KPM == 'KPM' && '_KPM' || github.event.inputs.KPM == 'KPN' && '_KPN' || '' }}${{ github.event.inputs.LSM_BBG == 'true' && '_BBG' || '' }}_ILH${{ github.event.inputs.SCHED_HMBIRD== 'true' && '_HMBIRD' || '' }}${{ github.event.inputs.RE_KERNEL == 'true' && '_REKER' || '' }}" >> $GITHUB_OUTPUT
 
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v7
