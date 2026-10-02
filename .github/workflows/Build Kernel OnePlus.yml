@@ -127,7 +127,7 @@ on:
         type: boolean
         description: "是否启用极速构建？//Enable ultra-fast build?"
         required: true
-        default: true
+        default: false
       LSM_BBG:
         type: boolean
         description: "是否启用关键分区写入保护模块(BBG)？//Enable critical partition write protection module (BBG)?"
